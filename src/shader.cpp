@@ -9,8 +9,7 @@ Shader::Shader(std::string vertexPath, std::string fragmentPath)
     glAttachShader(id, vertexShader);
     glAttachShader(id, fragmentShader);
     
-    linkShader(GL_VERTEX_SHADER, id);
-    linkShader(GL_FRAGMENT_SHADER, id);
+    linkProgram(id);
 
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
@@ -51,11 +50,11 @@ GLuint Shader::compileShader(GLenum type, const std::string& source)
     return shader;
 }
 
-void Shader::linkShader(GLenum type, GLuint programId) 
+void Shader::linkProgram(GLuint programId) 
 {
     glLinkProgram(programId);
     GLint success;
-    glGetProgramiv(programId, GL_COMPILE_STATUS, &success);
+    glGetProgramiv(programId, GL_LINK_STATUS, &success);
     if (!success) 
     {
         GLint logLength;

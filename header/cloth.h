@@ -5,7 +5,7 @@
 
 struct Particle 
 {
-    float mass=1.0f;
+    float mass=0.0025f;
     glm::vec3 velocity;
     glm::vec3 position;
     glm::vec3 force;
@@ -31,10 +31,21 @@ public:
         for (int i=0; i<n; i++) {
             for (int j=0; j<n; j++) {
                 float spacing = 2.0f / (n-1);
-                // row 0 is top, row n-1 is bottom
                 float x = -1+j * spacing;
                 float y = 1-i * spacing;
                 at(i,j).position = glm::vec3(x,y,0);
+            }
+        }
+
+        // Initialize spring
+        glm::float32 stiffness = 10.0f;
+        for (int i=0; i<n; i++) {
+            for (int j=0; j<n; j++) {
+                float spacing = 2.0f / (n-1);
+                // The if statements are used to avoid linking the last particle with 
+                // the first particle
+                if (j + 1 < n) springs.push_back({i*n+j, i*n+(j+1), spacing, stiffness});
+                if (i + 1 < n) springs.push_back({i*n+j, (i+1)*n+j, spacing, stiffness});
             }
         }
 
@@ -59,19 +70,43 @@ public:
 
     void update(float dt) 
     {
-        // update for each particle
-        for (auto& particle : particles) 
+        const int substeps = 4;
+        for (int s = 0; s < substeps; ++s) 
         {
-            // skip if the particle is pinned
-            if (particle.pinned)
+            dt = dt / substeps;
+
+            // apply gravity force
+            for (auto& particle : particles) 
             {
-                continue;
+                particle.force = glm::vec3(0);
+                particle.force += glm::vec3(0, -9.81, 0) * particle.mass;
             }
 
-            particle.force = glm::vec3(0);
-            particle.force = glm::vec3(0, -9.81, 0) * particle.mass;
-            particle.velocity += (particle.force / particle.mass) * dt;
-            particle.position += particle.velocity * dt;
+            // apply spring force
+            for (auto& spring : springs)
+            {
+                glm::vec3 displacement = particles[spring.a].position - particles[spring.b].position;
+                glm::float32 currentLength = glm::length(displacement);
+                glm::float32 stretch = currentLength - spring.restLength;
+                glm::vec3 direction = displacement / currentLength;
+                glm::vec3 force = -spring.stiffness * stretch * direction;
+                particles[spring.a].force += force;
+                particles[spring.b].force -= force;
+            }
+
+            // apply total force
+            for (auto& particle : particles)
+            {
+                if (particle.pinned)
+                {
+                    continue;
+                }
+
+                particle.velocity += (particle.force / particle.mass) * dt;
+                // add damping
+                particle.velocity *= glm::max(0.0f, 1.0f - 0.5f * dt);
+                particle.position += particle.velocity * dt;
+            }
         }
     }
 

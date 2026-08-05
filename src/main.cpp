@@ -1,6 +1,8 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -36,11 +38,13 @@ int main() {
     std::vector<glm::vec3> positions;
 
     // cloth
-    Cloth cloth(20);
+    Cloth cloth(40);
     Particle& particle = cloth.at(0,1);
     
-    glViewport(0, 0, 800, 600);
-
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+    glViewport(0, 0, w, h);
+    
     GLuint VAO, VBO;
     std::vector<glm::vec3> particlePositions = cloth.getPositions();
     glGenVertexArrays(1, &VAO);
@@ -54,6 +58,10 @@ int main() {
 
     // CMake copies shaders/ next to the executable at build time
     Shader clothShader("shaders/cloth.vert", "shaders/cloth.frag");
+    GLint mvpLocation = glGetUniformLocation(clothShader.id(), "uMVP");
+
+    // camera position: move further back along z to zoom out
+    glm::vec3 cameraPos(0, 0, 15);
 
     float last = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
@@ -61,6 +69,12 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT);
 
         clothShader.use();
+
+        // re-read the size each frame so the aspect ratio survives a resize
+        glfwGetFramebufferSize(window, &w, &h);
+        glm::mat4 proj = glm::perspective(glm::radians(45.0f), (float)w/(float)h, 0.1f, 100.0f);
+        glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+        glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, glm::value_ptr(proj * view));
 
         float now = glfwGetTime();
         float dt = now - last;

@@ -18,7 +18,7 @@ private:
 
     static std::string readFile(std::string path);
     static GLuint compileShader(GLenum type, const std::string& source);
-    void linkShader(GLenum type, GLuint programId);
+    void linkProgram(GLuint programId);
 };
 
 
