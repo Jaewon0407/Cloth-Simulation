@@ -44,10 +44,11 @@ int main() {
     glfwGetFramebufferSize(window, &w, &h);
     glViewport(0, 0, w, h);
     
-    GLuint VAO, VBO;
+    GLuint VAO, VBO, EBO;
     std::vector<glm::vec3> particlePositions = cloth.getPositions();
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, particlePositions.size()*sizeof(glm::vec3), particlePositions.data(), GL_DYNAMIC_DRAW);
@@ -55,24 +56,42 @@ int main() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
     glEnableVertexAttribArray(0);
 
+    std::vector<GLuint> lineIndices;
+    auto uploadLineIndices = [&]() {
+        lineIndices.clear();
+        for (const auto& c : cloth.constraints()) {
+            if (c.type != ConstraintType::Structural)
+                continue;
+            lineIndices.push_back(c.a);
+            lineIndices.push_back(c.b);
+        }
+        glBindVertexArray(VAO);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, lineIndices.size()*sizeof(GLuint), lineIndices.data(), GL_DYNAMIC_DRAW);
+    };
+    uploadLineIndices();
+
     // CMake copies shaders/ next to the executable at build time
     Shader clothShader("shaders/cloth.vert", "shaders/cloth.frag");
     GLint mvpLocation = glGetUniformLocation(clothShader.id(), "uMVP");
+    GLint colorLocation = glGetUniformLocation(clothShader.id(), "uColor");
 
-    // camera position: move further back along z to zoom out
-    glm::vec3 cameraPos(0, 0, 15);
+    glm::vec3 cameraPos(3.0f, 1.5f, 4.5f);
+    glm::vec3 cameraTarget(0.0f, -0.3f, 0.0f);
+
+    glEnable(GL_DEPTH_TEST);
 
     float last = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         clothShader.use();
 
         // re-read the size each frame so the aspect ratio survives a resize
         glfwGetFramebufferSize(window, &w, &h);
         glm::mat4 proj = glm::perspective(glm::radians(45.0f), (float)w/(float)h, 0.1f, 100.0f);
-        glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0, 0, 0), glm::vec3(0, 1, 0));
+        glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, glm::vec3(0, 1, 0));
         glUniformMatrix4fv(mvpLocation, 1, GL_FALSE, glm::value_ptr(proj * view));
 
         float now = glfwGetTime();
@@ -85,8 +104,8 @@ int main() {
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
         glBufferSubData(GL_ARRAY_BUFFER, 0, positions.size()*sizeof(glm::vec3), positions.data());
         glBindVertexArray(VAO);
-        glPointSize(5.0f);
-        glDrawArrays(GL_POINTS, 0, positions.size());
+        glUniform3f(colorLocation, 0.9f, 0.9f, 0.9f);
+        glDrawElements(GL_LINES, (GLsizei)lineIndices.size(), GL_UNSIGNED_INT, nullptr);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
