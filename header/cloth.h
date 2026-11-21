@@ -26,6 +26,7 @@ struct DistanceConstraint
     float restLength;
     float compliance;
     ConstraintType type;
+    bool torn = false;
 };
 
 struct ClothSettings
@@ -47,6 +48,9 @@ struct ClothSettings
 
     bool selfCollision = true;
     float selfCollisionThicknessRatio = 0.9f;
+
+    bool tearing = true;
+    float tearRatio = 1.6f;
 };
 
 class Cloth
@@ -58,6 +62,7 @@ public:
     void reset();
 
     void releasePins();
+    void movePinned(int i, int j, const glm::vec3& delta);
 
     Particle& at(int i, int j) { return particles_[i*N + j]; }
     int resolution() const { return N; }
@@ -66,6 +71,7 @@ public:
     const std::vector<Particle>& particles() const { return particles_; }
     const std::vector<DistanceConstraint>& constraints() const { return constraints_; }
     std::vector<glm::vec3> getPositions() const;
+    int topologyVersion() const { return topologyVersion_; }
 
     CollisionWorld& colliders() { return colliders_; }
     const CollisionWorld& colliders() const { return colliders_; }
@@ -82,12 +88,15 @@ private:
     void solveCollisions();
     void applyFriction(Particle& p, const glm::vec3& normal) const;
     void updateVelocities(float h);
+    void removeTornConstraints();
 
     ClothSettings settings_;
     int N;
     std::vector<Particle> particles_;
     std::vector<DistanceConstraint> constraints_;
     CollisionWorld colliders_;
+    bool anyTorn_ = false;
+    int topologyVersion_ = 0;
 
     SpatialHash hash_;
     std::vector<glm::vec3> snapshot_;

@@ -135,6 +135,7 @@ int main() {
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, lineIndices.size()*sizeof(GLuint), lineIndices.data(), GL_DYNAMIC_DRAW);
     };
     uploadLineIndices();
+    int uploadedTopology = cloth.topologyVersion();
 
     GLuint debugVAO, debugVBO;
     glGenVertexArrays(1, &debugVAO);
@@ -184,7 +185,6 @@ int main() {
         if (resetDown && !resetWasDown) {
             cloth.reset();
             setupScene(cloth);
-            uploadLineIndices();
         }
         resetWasDown = resetDown;
 
@@ -201,7 +201,18 @@ int main() {
         if (!cloth.colliders().spheres.empty())
             cloth.colliders().spheres[0].center += move * 1.5f * dt;
 
+        if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS) {
+            const int n = cloth.resolution();
+            const float pull = 0.75f * dt;
+            for (int j = 0; j < n; ++j)
+                cloth.movePinned(0, j, glm::vec3(j < n / 2 ? -pull : pull, 0.0f, 0.0f));
+        }
+
         cloth.update(dt);
+        if (cloth.topologyVersion() != uploadedTopology) {
+            uploadLineIndices();
+            uploadedTopology = cloth.topologyVersion();
+        }
 
         auto positions = cloth.getPositions();
         glBindBuffer(GL_ARRAY_BUFFER, VBO);

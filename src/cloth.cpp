@@ -1,5 +1,6 @@
 #include "../header/cloth.h"
 
+#include <algorithm>
 #include <cmath>
 
 Cloth::Cloth(const ClothSettings& settings)
@@ -12,6 +13,8 @@ void Cloth::reset()
 {
     buildParticles();
     buildConstraints();
+    anyTorn_ = false;
+    topologyVersion_++;
 }
 
 void Cloth::buildParticles()
@@ -28,8 +31,8 @@ void Cloth::buildParticles()
         }
     }
 
-    at(0, 0).invMass = 0.0f;
-    at(0, N-1).invMass = 0.0f;
+    for (int j = 0; j < N; j++)
+        at(0, j).invMass = 0.0f;
 }
 
 void Cloth::buildConstraints()
@@ -62,6 +65,15 @@ void Cloth::releasePins()
         p.invMass = 1.0f / settings_.particleMass;
 }
 
+void Cloth::movePinned(int i, int j, const glm::vec3& delta)
+{
+    Particle& p = at(i, j);
+    if (p.invMass != 0.0f)
+        return;
+    p.position += delta;
+    p.prevPosition = p.position;
+}
+
 std::vector<glm::vec3> Cloth::getPositions() const
 {
     std::vector<glm::vec3> positions(particles_.size());
@@ -81,6 +93,9 @@ void Cloth::update(float dt)
         substep(h);
         substepsUntilRebuild--;
     }
+
+    if (anyTorn_)
+        removeTornConstraints();
 }
 
 void Cloth::substep(float h)
@@ -108,17 +123,25 @@ void Cloth::integrate(float h)
 void Cloth::solveConstraints(float h)
 {
     const float invH2 = 1.0f / (h*h);
-    for (const auto& c : constraints_)
+    for (auto& c : constraints_)
     {
-        Particle& pa = particles_[c.a];
-        Particle& pb = particles_[c.b];
-        const float w = pa.invMass + pb.invMass;
-        if (w == 0.0f)
+        if (c.torn)
             continue;
 
+        Particle& pa = particles_[c.a];
+        Particle& pb = particles_[c.b];
         const glm::vec3 delta = pa.position - pb.position;
         const float length = glm::length(delta);
-        if (length < 1e-9f)
+
+        if (settings_.tearing && length > settings_.tearRatio * c.restLength)
+        {
+            c.torn = true;
+            anyTorn_ = true;
+            continue;
+        }
+
+        const float w = pa.invMass + pb.invMass;
+        if (w == 0.0f || length < 1e-9f)
             continue;
 
         const float C = length - c.restLength;
@@ -286,4 +309,11 @@ void Cloth::updateVelocities(float h)
             continue;
         p.velocity = (p.position - p.prevPosition) / h * damping;
     }
+}
+
+void Cloth::removeTornConstraints()
+{
+    std::erase_if(constraints_, [](const DistanceConstraint& c) { return c.torn; });
+    anyTorn_ = false;
+    topologyVersion_++;
 }
