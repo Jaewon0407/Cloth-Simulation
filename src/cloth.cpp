@@ -1,10 +1,12 @@
 #include "../header/cloth.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 Cloth::Cloth(const ClothSettings& settings)
-    : settings_(settings), N(settings.resolution)
+    : settings_(settings), N(settings.resolution),
+      pool_(std::make_unique<ThreadPool>(settings.threadCount))
 {
     reset();
 }
@@ -13,6 +15,7 @@ void Cloth::reset()
 {
     buildParticles();
     buildConstraints();
+    colorConstraints();
     anyTorn_ = false;
     topologyVersion_++;
 }
@@ -59,6 +62,34 @@ void Cloth::buildConstraints()
     }
 }
 
+void Cloth::colorConstraints()
+{
+    std::vector<uint64_t> usedColors(particles_.size(), 0);
+    for (auto& c : constraints_)
+    {
+        const uint64_t taken = usedColors[c.a] | usedColors[c.b];
+        const int color = std::countr_one(taken);
+        c.color = static_cast<uint8_t>(color);
+        usedColors[c.a] |= uint64_t(1) << color;
+        usedColors[c.b] |= uint64_t(1) << color;
+    }
+
+    std::stable_sort(constraints_.begin(), constraints_.end(),
+                     [](const DistanceConstraint& x, const DistanceConstraint& y) { return x.color < y.color; });
+    computeColorRanges();
+}
+
+void Cloth::computeColorRanges()
+{
+    colorStart_.assign(1, 0);
+    for (int k = 0; k < static_cast<int>(constraints_.size()); ++k)
+    {
+        while (static_cast<int>(colorStart_.size()) <= constraints_[k].color)
+            colorStart_.push_back(k);
+    }
+    colorStart_.push_back(static_cast<int>(constraints_.size()));
+}
+
 void Cloth::releasePins()
 {
     for (auto& p : particles_)
@@ -94,8 +125,14 @@ void Cloth::update(float dt)
         substepsUntilRebuild--;
     }
 
-    if (anyTorn_)
+    if (anyTorn_.load(std::memory_order_relaxed))
         removeTornConstraints();
+}
+
+namespace
+{
+constexpr int kParticleGrain = 256;
+constexpr int kConstraintGrain = 512;
 }
 
 void Cloth::substep(float h)
@@ -103,55 +140,71 @@ void Cloth::substep(float h)
     integrate(h);
     solveConstraints(h);
     if (settings_.selfCollision)
-        solveSelfCollisions();
-    solveCollisions();
-    updateVelocities(h);
+        computeSelfCollisionCorrections();
+    finishSubstep(h);
 }
 
 void Cloth::integrate(float h)
 {
-    for (auto& p : particles_)
-    {
-        p.prevPosition = p.position;
-        if (p.invMass == 0.0f)
-            continue;
-        p.velocity += settings_.gravity * h;
-        p.position += p.velocity * h;
-    }
+    pool_->parallelFor(static_cast<int>(particles_.size()), kParticleGrain, [this, h](int begin, int end) {
+        const glm::vec3 dv = settings_.gravity * h;
+        for (int i = begin; i < end; ++i)
+        {
+            Particle& p = particles_[i];
+            p.prevPosition = p.position;
+            if (p.invMass == 0.0f)
+                continue;
+            p.velocity += dv;
+            p.position += p.velocity * h;
+        }
+    });
 }
 
 void Cloth::solveConstraints(float h)
 {
     const float invH2 = 1.0f / (h*h);
-    for (auto& c : constraints_)
+    for (int color = 0; color + 1 < static_cast<int>(colorStart_.size()); ++color)
     {
-        if (c.torn)
-            continue;
-
-        Particle& pa = particles_[c.a];
-        Particle& pb = particles_[c.b];
-        const glm::vec3 delta = pa.position - pb.position;
-        const float length = glm::length(delta);
-
-        if (settings_.tearing && length > settings_.tearRatio * c.restLength)
-        {
-            c.torn = true;
-            anyTorn_ = true;
-            continue;
-        }
-
-        const float w = pa.invMass + pb.invMass;
-        if (w == 0.0f || length < 1e-9f)
-            continue;
-
-        const float C = length - c.restLength;
-        const float alpha = c.compliance * invH2;
-        const float dLambda = -C / (w + alpha);
-        const glm::vec3 correction = (dLambda / length) * delta;
-
-        pa.position += pa.invMass * correction;
-        pb.position -= pb.invMass * correction;
+        const int first = colorStart_[color];
+        const int count = colorStart_[color + 1] - first;
+        pool_->parallelFor(count, kConstraintGrain, [this, first, invH2](int begin, int end) {
+            bool tore = false;
+            for (int k = first + begin; k < first + end; ++k)
+                tore |= projectConstraint(constraints_[k], invH2);
+            if (tore)
+                anyTorn_.store(true, std::memory_order_relaxed);
+        });
     }
+}
+
+bool Cloth::projectConstraint(DistanceConstraint& c, float invH2)
+{
+    if (c.torn)
+        return false;
+
+    Particle& pa = particles_[c.a];
+    Particle& pb = particles_[c.b];
+    const glm::vec3 delta = pa.position - pb.position;
+    const float length = glm::length(delta);
+
+    if (settings_.tearing && length > settings_.tearRatio * c.restLength)
+    {
+        c.torn = true;
+        return true;
+    }
+
+    const float w = pa.invMass + pb.invMass;
+    if (w == 0.0f || length < 1e-9f)
+        return false;
+
+    const float C = length - c.restLength;
+    const float alpha = c.compliance * invH2;
+    const float dLambda = -C / (w + alpha);
+    const glm::vec3 correction = (dLambda / length) * delta;
+
+    pa.position += pa.invMass * correction;
+    pb.position -= pb.invMass * correction;
+    return false;
 }
 
 int Cloth::findSelfCollisionNeighbors(float h)
@@ -174,121 +227,149 @@ int Cloth::findSelfCollisionNeighbors(float h)
     const float queryRadius2 = queryRadius * queryRadius;
     hash_.build(snapshot_, queryRadius);
 
-    neighborStart_.assign(count + 1, 0);
-    neighbors_.clear();
-    for (int i = 0; i < count; ++i)
-    {
-        neighborStart_[i] = static_cast<int>(neighbors_.size());
+    auto forEachNeighbor = [this, queryRadius2](int i, auto&& fn) {
         if (particles_[i].invMass == 0.0f)
-            continue;
+            return;
         const glm::vec3 xi = snapshot_[i];
         hash_.forEachNearby(xi, [&](int j) {
             if (j == i)
                 return;
             const glm::vec3 d = xi - snapshot_[j];
             if (glm::dot(d, d) < queryRadius2)
-                neighbors_.push_back(j);
+                fn(j);
         });
-    }
-    neighborStart_[count] = static_cast<int>(neighbors_.size());
+    };
+
+    neighborStart_.assign(count + 1, 0);
+    pool_->parallelFor(count, kParticleGrain, [&](int begin, int end) {
+        for (int i = begin; i < end; ++i)
+        {
+            int found = 0;
+            forEachNeighbor(i, [&](int) { found++; });
+            neighborStart_[i + 1] = found;
+        }
+    });
+
+    for (int i = 0; i < count; ++i)
+        neighborStart_[i + 1] += neighborStart_[i];
+    neighbors_.resize(neighborStart_[count]);
+
+    pool_->parallelFor(count, kParticleGrain, [&](int begin, int end) {
+        for (int i = begin; i < end; ++i)
+        {
+            int k = neighborStart_[i];
+            forEachNeighbor(i, [&](int j) { neighbors_[k++] = j; });
+        }
+    });
+
     return interval;
 }
 
-void Cloth::solveSelfCollisions()
+void Cloth::computeSelfCollisionCorrections()
 {
     const float thickness = settings_.selfCollisionThicknessRatio * spacing();
-    const float thickness2 = thickness * thickness;
     const int count = static_cast<int>(particles_.size());
+    selfCorrections_.resize(count);
 
-    for (int i = 0; i < count; ++i)
-        snapshot_[i] = particles_[i].position;
-
-    selfCorrections_.assign(count, glm::vec3(0.0f));
-    for (int i = 0; i < count; ++i)
-    {
-        const float wi = particles_[i].invMass;
-        if (wi == 0.0f)
-            continue;
-
-        const int ri = i / N, ci = i % N;
-        const glm::vec3 xi = snapshot_[i];
-        glm::vec3 correction(0.0f);
-        int contacts = 0;
-
-        for (int k = neighborStart_[i]; k < neighborStart_[i + 1]; ++k)
+    pool_->parallelFor(count, kParticleGrain, [this, thickness](int begin, int end) {
+        const float thickness2 = thickness * thickness;
+        for (int i = begin; i < end; ++i)
         {
-            const int j = neighbors_[k];
-            const glm::vec3 d = xi - snapshot_[j];
-            const float dist2 = glm::dot(d, d);
-            if (dist2 >= thickness2 || dist2 < 1e-12f)
+            selfCorrections_[i] = glm::vec3(0.0f);
+            const float wi = particles_[i].invMass;
+            if (wi == 0.0f)
                 continue;
 
-            const int dr = ri - j / N, dc = ci - j % N;
-            const float restDist = spacing() * std::sqrt(static_cast<float>(dr*dr + dc*dc));
-            const float minDist = glm::min(thickness, restDist);
-            const float dist = std::sqrt(dist2);
-            if (dist >= minDist)
-                continue;
+            const int ri = i / N, ci = i % N;
+            const glm::vec3 xi = particles_[i].position;
+            glm::vec3 correction(0.0f);
+            int contacts = 0;
 
-            const float wj = particles_[j].invMass;
-            correction += (minDist - dist) * (wi / (wi + wj)) * (d / dist);
-            contacts++;
+            for (int k = neighborStart_[i]; k < neighborStart_[i + 1]; ++k)
+            {
+                const int j = neighbors_[k];
+                const glm::vec3 d = xi - particles_[j].position;
+                const float dist2 = glm::dot(d, d);
+                if (dist2 >= thickness2 || dist2 < 1e-12f)
+                    continue;
+
+                const int dr = ri - j / N, dc = ci - j % N;
+                const float restDist = spacing() * std::sqrt(static_cast<float>(dr*dr + dc*dc));
+                const float minDist = glm::min(thickness, restDist);
+                const float dist = std::sqrt(dist2);
+                if (dist >= minDist)
+                    continue;
+
+                const float wj = particles_[j].invMass;
+                correction += (minDist - dist) * (wi / (wi + wj)) * (d / dist);
+                contacts++;
+            }
+
+            if (contacts > 0)
+                selfCorrections_[i] = correction / static_cast<float>(contacts);
         }
-
-        if (contacts > 0)
-            selfCorrections_[i] = correction / static_cast<float>(contacts);
-    }
-
-    for (int i = 0; i < count; ++i)
-        particles_[i].position += selfCorrections_[i];
+    });
 }
 
-void Cloth::solveCollisions()
+void Cloth::finishSubstep(float h)
+{
+    const bool self = settings_.selfCollision;
+    pool_->parallelFor(static_cast<int>(particles_.size()), kParticleGrain, [this, h, self](int begin, int end) {
+        const float damping = glm::max(0.0f, 1.0f - settings_.damping * h);
+        for (int i = begin; i < end; ++i)
+        {
+            Particle& p = particles_[i];
+            if (p.invMass == 0.0f)
+                continue;
+            if (self)
+                p.position += selfCorrections_[i];
+            collideWithWorld(p);
+            p.velocity = (p.position - p.prevPosition) / h * damping;
+        }
+    });
+}
+
+void Cloth::collideWithWorld(Particle& p) const
 {
     const float margin = settings_.collisionMargin;
-    for (auto& p : particles_)
+
+    for (const auto& sphere : colliders_.spheres)
     {
-        if (p.invMass == 0.0f)
+        const glm::vec3 d = p.position - sphere.center;
+        const float r = sphere.radius + margin;
+        const float dist2 = glm::dot(d, d);
+        if (dist2 >= r*r || dist2 < 1e-12f)
+            continue;
+        const glm::vec3 n = d / std::sqrt(dist2);
+        p.position = sphere.center + n * r;
+        applyFriction(p, n);
+    }
+
+    for (const auto& box : colliders_.boxes)
+    {
+        const glm::vec3 local = p.position - box.center;
+        const glm::vec3 extent = box.halfExtents + glm::vec3(margin);
+        const glm::vec3 depth = extent - glm::abs(local);
+        if (depth.x <= 0.0f || depth.y <= 0.0f || depth.z <= 0.0f)
             continue;
 
-        for (const auto& sphere : colliders_.spheres)
+        int axis = 0;
+        if (depth.y < depth[axis]) axis = 1;
+        if (depth.z < depth[axis]) axis = 2;
+
+        glm::vec3 n(0.0f);
+        n[axis] = local[axis] >= 0.0f ? 1.0f : -1.0f;
+        p.position[axis] = box.center[axis] + n[axis] * extent[axis];
+        applyFriction(p, n);
+    }
+
+    if (colliders_.ground.enabled)
+    {
+        const float floor = colliders_.ground.height + margin;
+        if (p.position.y < floor)
         {
-            const glm::vec3 d = p.position - sphere.center;
-            const float r = sphere.radius + margin;
-            const float dist2 = glm::dot(d, d);
-            if (dist2 >= r*r || dist2 < 1e-12f)
-                continue;
-            const glm::vec3 n = d / std::sqrt(dist2);
-            p.position = sphere.center + n * r;
-            applyFriction(p, n);
-        }
-
-        for (const auto& box : colliders_.boxes)
-        {
-            const glm::vec3 local = p.position - box.center;
-            const glm::vec3 extent = box.halfExtents + glm::vec3(margin);
-            const glm::vec3 depth = extent - glm::abs(local);
-            if (depth.x <= 0.0f || depth.y <= 0.0f || depth.z <= 0.0f)
-                continue;
-
-            int axis = 0;
-            if (depth.y < depth[axis]) axis = 1;
-            if (depth.z < depth[axis]) axis = 2;
-
-            glm::vec3 n(0.0f);
-            n[axis] = local[axis] >= 0.0f ? 1.0f : -1.0f;
-            p.position[axis] = box.center[axis] + n[axis] * extent[axis];
-            applyFriction(p, n);
-        }
-
-        if (colliders_.ground.enabled)
-        {
-            const float floor = colliders_.ground.height + margin;
-            if (p.position.y < floor)
-            {
-                p.position.y = floor;
-                applyFriction(p, glm::vec3(0.0f, 1.0f, 0.0f));
-            }
+            p.position.y = floor;
+            applyFriction(p, glm::vec3(0.0f, 1.0f, 0.0f));
         }
     }
 }
@@ -300,20 +381,10 @@ void Cloth::applyFriction(Particle& p, const glm::vec3& normal) const
     p.position -= tangential * settings_.friction;
 }
 
-void Cloth::updateVelocities(float h)
-{
-    const float damping = glm::max(0.0f, 1.0f - settings_.damping * h);
-    for (auto& p : particles_)
-    {
-        if (p.invMass == 0.0f)
-            continue;
-        p.velocity = (p.position - p.prevPosition) / h * damping;
-    }
-}
-
 void Cloth::removeTornConstraints()
 {
     std::erase_if(constraints_, [](const DistanceConstraint& c) { return c.torn; });
-    anyTorn_ = false;
+    computeColorRanges();
+    anyTorn_.store(false, std::memory_order_relaxed);
     topologyVersion_++;
 }

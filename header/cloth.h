@@ -2,7 +2,10 @@
 #include <glm/glm.hpp>
 #include "collider.h"
 #include "spatial_hash.h"
+#include "thread_pool.h"
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 struct Particle
@@ -26,6 +29,7 @@ struct DistanceConstraint
     float restLength;
     float compliance;
     ConstraintType type;
+    uint8_t color = 0;
     bool torn = false;
 };
 
@@ -51,6 +55,8 @@ struct ClothSettings
 
     bool tearing = true;
     float tearRatio = 1.6f;
+
+    unsigned threadCount = 0;
 };
 
 class Cloth
@@ -72,6 +78,8 @@ public:
     const std::vector<DistanceConstraint>& constraints() const { return constraints_; }
     std::vector<glm::vec3> getPositions() const;
     int topologyVersion() const { return topologyVersion_; }
+    int constraintColorCount() const { return static_cast<int>(colorStart_.size()) - 1; }
+    unsigned threadCount() const { return pool_->threadCount(); }
 
     CollisionWorld& colliders() { return colliders_; }
     const CollisionWorld& colliders() const { return colliders_; }
@@ -79,24 +87,30 @@ public:
 private:
     void buildParticles();
     void buildConstraints();
+    void colorConstraints();
+    void computeColorRanges();
 
     void substep(float h);
     void integrate(float h);
     void solveConstraints(float h);
+    bool projectConstraint(DistanceConstraint& c, float invH2);
     int findSelfCollisionNeighbors(float h);
-    void solveSelfCollisions();
-    void solveCollisions();
+    void computeSelfCollisionCorrections();
+    void finishSubstep(float h);
+    void collideWithWorld(Particle& p) const;
     void applyFriction(Particle& p, const glm::vec3& normal) const;
-    void updateVelocities(float h);
     void removeTornConstraints();
 
     ClothSettings settings_;
     int N;
     std::vector<Particle> particles_;
     std::vector<DistanceConstraint> constraints_;
+    std::vector<int> colorStart_;
     CollisionWorld colliders_;
-    bool anyTorn_ = false;
+    std::atomic<bool> anyTorn_{false};
     int topologyVersion_ = 0;
+
+    std::unique_ptr<ThreadPool> pool_;
 
     SpatialHash hash_;
     std::vector<glm::vec3> snapshot_;
