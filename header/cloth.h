@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include "collider.h"
 #include <cstdint>
 #include <vector>
 
@@ -39,6 +40,9 @@ struct ClothSettings
     float structuralCompliance = 0.0f;
     float shearCompliance = 1e-3f;
     float bendCompliance = 1e-2f;
+
+    float collisionMargin = 0.02f;
+    float friction = 0.3f;
 };
 
 class Cloth
@@ -59,6 +63,9 @@ public:
     const std::vector<DistanceConstraint>& constraints() const { return constraints_; }
     std::vector<glm::vec3> getPositions() const;
 
+    CollisionWorld& colliders() { return colliders_; }
+    const CollisionWorld& colliders() const { return colliders_; }
+
 private:
     void buildParticles();
     void buildConstraints();
@@ -66,10 +73,13 @@ private:
     void substep(float h);
     void integrate(float h);
     void solveConstraints(float h);
+    void solveCollisions();
+    void applyFriction(Particle& p, const glm::vec3& normal) const;
     void updateVelocities(float h);
 
     ClothSettings settings_;
     int N;
     std::vector<Particle> particles_;
     std::vector<DistanceConstraint> constraints_;
+    CollisionWorld colliders_;
 };

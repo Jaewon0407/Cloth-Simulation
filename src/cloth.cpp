@@ -81,6 +81,7 @@ void Cloth::substep(float h)
 {
     integrate(h);
     solveConstraints(h);
+    solveCollisions();
     updateVelocities(h);
 }
 
@@ -120,6 +121,63 @@ void Cloth::solveConstraints(float h)
         pa.position += pa.invMass * correction;
         pb.position -= pb.invMass * correction;
     }
+}
+
+void Cloth::solveCollisions()
+{
+    const float margin = settings_.collisionMargin;
+    for (auto& p : particles_)
+    {
+        if (p.invMass == 0.0f)
+            continue;
+
+        for (const auto& sphere : colliders_.spheres)
+        {
+            const glm::vec3 d = p.position - sphere.center;
+            const float r = sphere.radius + margin;
+            const float dist2 = glm::dot(d, d);
+            if (dist2 >= r*r || dist2 < 1e-12f)
+                continue;
+            const glm::vec3 n = d / std::sqrt(dist2);
+            p.position = sphere.center + n * r;
+            applyFriction(p, n);
+        }
+
+        for (const auto& box : colliders_.boxes)
+        {
+            const glm::vec3 local = p.position - box.center;
+            const glm::vec3 extent = box.halfExtents + glm::vec3(margin);
+            const glm::vec3 depth = extent - glm::abs(local);
+            if (depth.x <= 0.0f || depth.y <= 0.0f || depth.z <= 0.0f)
+                continue;
+
+            int axis = 0;
+            if (depth.y < depth[axis]) axis = 1;
+            if (depth.z < depth[axis]) axis = 2;
+
+            glm::vec3 n(0.0f);
+            n[axis] = local[axis] >= 0.0f ? 1.0f : -1.0f;
+            p.position[axis] = box.center[axis] + n[axis] * extent[axis];
+            applyFriction(p, n);
+        }
+
+        if (colliders_.ground.enabled)
+        {
+            const float floor = colliders_.ground.height + margin;
+            if (p.position.y < floor)
+            {
+                p.position.y = floor;
+                applyFriction(p, glm::vec3(0.0f, 1.0f, 0.0f));
+            }
+        }
+    }
+}
+
+void Cloth::applyFriction(Particle& p, const glm::vec3& normal) const
+{
+    const glm::vec3 moved = p.position - p.prevPosition;
+    const glm::vec3 tangential = moved - glm::dot(moved, normal) * normal;
+    p.position -= tangential * settings_.friction;
 }
 
 void Cloth::updateVelocities(float h)
