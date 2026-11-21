@@ -8,7 +8,7 @@ project(ClothSimulation)
 
 set(CMAKE_CXX_STANDARD 20)
 
-add_library(ClothPhysics STATIC src/cloth.cpp)
+add_library(ClothPhysics STATIC src/cloth.cpp src/spatial_hash.cpp)
 target_include_directories(ClothPhysics PUBLIC include include/glm)
 set_target_properties(ClothPhysics PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 

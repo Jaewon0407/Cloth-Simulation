@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include "collider.h"
+#include "spatial_hash.h"
 #include <cstdint>
 #include <vector>
 
@@ -43,6 +44,9 @@ struct ClothSettings
 
     float collisionMargin = 0.02f;
     float friction = 0.3f;
+
+    bool selfCollision = true;
+    float selfCollisionThicknessRatio = 0.9f;
 };
 
 class Cloth
@@ -73,6 +77,8 @@ private:
     void substep(float h);
     void integrate(float h);
     void solveConstraints(float h);
+    int findSelfCollisionNeighbors(float h);
+    void solveSelfCollisions();
     void solveCollisions();
     void applyFriction(Particle& p, const glm::vec3& normal) const;
     void updateVelocities(float h);
@@ -82,4 +88,10 @@ private:
     std::vector<Particle> particles_;
     std::vector<DistanceConstraint> constraints_;
     CollisionWorld colliders_;
+
+    SpatialHash hash_;
+    std::vector<glm::vec3> snapshot_;
+    std::vector<int> neighborStart_;
+    std::vector<int> neighbors_;
+    std::vector<glm::vec3> selfCorrections_;
 };

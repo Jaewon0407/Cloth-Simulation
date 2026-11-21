@@ -73,14 +73,22 @@ std::vector<glm::vec3> Cloth::getPositions() const
 void Cloth::update(float dt)
 {
     const float h = dt / settings_.substeps;
+    int substepsUntilRebuild = 0;
     for (int s = 0; s < settings_.substeps; ++s)
+    {
+        if (settings_.selfCollision && substepsUntilRebuild == 0)
+            substepsUntilRebuild = findSelfCollisionNeighbors(h);
         substep(h);
+        substepsUntilRebuild--;
+    }
 }
 
 void Cloth::substep(float h)
 {
     integrate(h);
     solveConstraints(h);
+    if (settings_.selfCollision)
+        solveSelfCollisions();
     solveCollisions();
     updateVelocities(h);
 }
@@ -121,6 +129,95 @@ void Cloth::solveConstraints(float h)
         pa.position += pa.invMass * correction;
         pb.position -= pb.invMass * correction;
     }
+}
+
+int Cloth::findSelfCollisionNeighbors(float h)
+{
+    const int count = static_cast<int>(particles_.size());
+    float maxSpeed2 = 0.0f;
+    snapshot_.resize(count);
+    for (int i = 0; i < count; ++i)
+    {
+        snapshot_[i] = particles_[i].position;
+        maxSpeed2 = glm::max(maxSpeed2, glm::dot(particles_[i].velocity, particles_[i].velocity));
+    }
+
+    const float thickness = settings_.selfCollisionThicknessRatio * spacing();
+    const float maxStep = 2.0f * std::sqrt(maxSpeed2) * h;
+    int interval = settings_.substeps;
+    if (maxStep > 0.0f)
+        interval = glm::clamp(static_cast<int>(thickness / maxStep), 1, settings_.substeps);
+    const float queryRadius = thickness + maxStep * interval;
+    const float queryRadius2 = queryRadius * queryRadius;
+    hash_.build(snapshot_, queryRadius);
+
+    neighborStart_.assign(count + 1, 0);
+    neighbors_.clear();
+    for (int i = 0; i < count; ++i)
+    {
+        neighborStart_[i] = static_cast<int>(neighbors_.size());
+        if (particles_[i].invMass == 0.0f)
+            continue;
+        const glm::vec3 xi = snapshot_[i];
+        hash_.forEachNearby(xi, [&](int j) {
+            if (j == i)
+                return;
+            const glm::vec3 d = xi - snapshot_[j];
+            if (glm::dot(d, d) < queryRadius2)
+                neighbors_.push_back(j);
+        });
+    }
+    neighborStart_[count] = static_cast<int>(neighbors_.size());
+    return interval;
+}
+
+void Cloth::solveSelfCollisions()
+{
+    const float thickness = settings_.selfCollisionThicknessRatio * spacing();
+    const float thickness2 = thickness * thickness;
+    const int count = static_cast<int>(particles_.size());
+
+    for (int i = 0; i < count; ++i)
+        snapshot_[i] = particles_[i].position;
+
+    selfCorrections_.assign(count, glm::vec3(0.0f));
+    for (int i = 0; i < count; ++i)
+    {
+        const float wi = particles_[i].invMass;
+        if (wi == 0.0f)
+            continue;
+
+        const int ri = i / N, ci = i % N;
+        const glm::vec3 xi = snapshot_[i];
+        glm::vec3 correction(0.0f);
+        int contacts = 0;
+
+        for (int k = neighborStart_[i]; k < neighborStart_[i + 1]; ++k)
+        {
+            const int j = neighbors_[k];
+            const glm::vec3 d = xi - snapshot_[j];
+            const float dist2 = glm::dot(d, d);
+            if (dist2 >= thickness2 || dist2 < 1e-12f)
+                continue;
+
+            const int dr = ri - j / N, dc = ci - j % N;
+            const float restDist = spacing() * std::sqrt(static_cast<float>(dr*dr + dc*dc));
+            const float minDist = glm::min(thickness, restDist);
+            const float dist = std::sqrt(dist2);
+            if (dist >= minDist)
+                continue;
+
+            const float wj = particles_[j].invMass;
+            correction += (minDist - dist) * (wi / (wi + wj)) * (d / dist);
+            contacts++;
+        }
+
+        if (contacts > 0)
+            selfCorrections_[i] = correction / static_cast<float>(contacts);
+    }
+
+    for (int i = 0; i < count; ++i)
+        particles_[i].position += selfCorrections_[i];
 }
 
 void Cloth::solveCollisions()
