@@ -1,5 +1,4 @@
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
+#pragma once
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -71,9 +70,9 @@ public:
     void update(float dt) 
     {
         const int substeps = 4;
+        const float h = dt / substeps;
         for (int s = 0; s < substeps; ++s) 
         {
-            dt = dt / substeps;
 
             // apply gravity force
             for (auto& particle : particles) 
@@ -102,10 +101,10 @@ public:
                     continue;
                 }
 
-                particle.velocity += (particle.force / particle.mass) * dt;
+                particle.velocity += (particle.force / particle.mass) * h;
                 // add damping
-                particle.velocity *= glm::max(0.0f, 1.0f - 0.5f * dt);
-                particle.position += particle.velocity * dt;
+                particle.velocity *= glm::max(0.0f, 1.0f - 0.5f * h);
+                particle.position += particle.velocity * h;
             }
         }
     }

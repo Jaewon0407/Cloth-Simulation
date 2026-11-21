@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(ClothSimulation src/main.cpp src/glad.c src/shader.cpp)
 
 # Tell compiler where to find headers
-target_include_directories(ClothSimulation PRIVATE include)
+target_include_directories(ClothSimulation PRIVATE include include/glm)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
