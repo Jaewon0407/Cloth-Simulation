@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <cmath>
 #include <vector>
 
 struct Particle 
@@ -36,15 +37,21 @@ public:
             }
         }
 
-        // Initialize spring
-        glm::float32 stiffness = 10.0f;
+        const float spacing = 2.0f / (n-1);
+        const float structuralStiffness = 10.0f;
+        const float shearStiffness = 5.0f;
+        const float bendStiffness = 1.0f;
+        auto idx = [n](int i, int j) { return i*n+j; };
         for (int i=0; i<n; i++) {
             for (int j=0; j<n; j++) {
-                float spacing = 2.0f / (n-1);
-                // The if statements are used to avoid linking the last particle with 
-                // the first particle
-                if (j + 1 < n) springs.push_back({i*n+j, i*n+(j+1), spacing, stiffness});
-                if (i + 1 < n) springs.push_back({i*n+j, (i+1)*n+j, spacing, stiffness});
+                if (j+1 < n) springs.push_back({idx(i,j), idx(i,j+1), spacing, structuralStiffness});
+                if (i+1 < n) springs.push_back({idx(i,j), idx(i+1,j), spacing, structuralStiffness});
+
+                if (i+1 < n && j+1 < n) springs.push_back({idx(i,j), idx(i+1,j+1), spacing*std::sqrt(2.0f), shearStiffness});
+                if (i+1 < n && j-1 >= 0) springs.push_back({idx(i,j), idx(i+1,j-1), spacing*std::sqrt(2.0f), shearStiffness});
+
+                if (j+2 < n) springs.push_back({idx(i,j), idx(i,j+2), 2.0f*spacing, bendStiffness});
+                if (i+2 < n) springs.push_back({idx(i,j), idx(i+2,j), 2.0f*spacing, bendStiffness});
             }
         }
 
