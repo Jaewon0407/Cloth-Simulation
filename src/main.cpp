@@ -38,8 +38,7 @@ int main() {
     std::vector<glm::vec3> positions;
 
     // cloth
-    Cloth cloth(40);
-    Particle& particle = cloth.at(0,1);
+    Cloth cloth;
     
     int w, h;
     glfwGetFramebufferSize(window, &w, &h);

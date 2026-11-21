@@ -8,6 +8,10 @@ project(ClothSimulation)
 
 set(CMAKE_CXX_STANDARD 20)
 
+add_library(ClothPhysics STATIC src/cloth.cpp)
+target_include_directories(ClothPhysics PUBLIC include include/glm)
+set_target_properties(ClothPhysics PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
 add_executable(ClothSimulation src/main.cpp src/glad.c src/shader.cpp)
 
 # Tell compiler where to find headers
@@ -23,7 +27,7 @@ find_package(OpenGL REQUIRED)
 # find_package/link is needed for it.
 
 # link libraries into the executable
-target_link_libraries(ClothSimulation PRIVATE glfw OpenGL::GL)
+target_link_libraries(ClothSimulation PRIVATE ClothPhysics glfw OpenGL::GL)
 
 # Copy the shaders next to the executable so the app can be run from any
 # directory, not just build/.

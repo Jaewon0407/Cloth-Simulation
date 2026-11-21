@@ -1,123 +1,75 @@
 #pragma once
 #include <glm/glm.hpp>
-#include <cmath>
+#include <cstdint>
 #include <vector>
 
-struct Particle 
+struct Particle
 {
-    float mass=0.0025f;
-    glm::vec3 velocity;
-    glm::vec3 position;
-    glm::vec3 force;
-
-    bool pinned=false;
+    glm::vec3 position{0.0f};
+    glm::vec3 prevPosition{0.0f};
+    glm::vec3 velocity{0.0f};
+    float invMass = 0.0f;
 };
 
-struct Spring 
+enum class ConstraintType : uint8_t
+{
+    Structural,
+    Shear,
+    Bend,
+};
+
+struct DistanceConstraint
 {
     int a, b;
     float restLength;
-    float stiffness;
+    float compliance;
+    ConstraintType type;
 };
 
-class Cloth 
+struct ClothSettings
+{
+    int resolution = 40;
+    float size = 2.0f;
+    float height = 1.0f;
+    float particleMass = 0.0025f;
+    int substeps = 15;
+    float damping = 0.5f;
+    glm::vec3 gravity{0.0f, -9.81f, 0.0f};
+
+    float structuralCompliance = 0.0f;
+    float shearCompliance = 1e-3f;
+    float bendCompliance = 1e-2f;
+};
+
+class Cloth
 {
 public:
-    Cloth(int n) : N(n) 
-    {
-        particles.resize(n*n);
+    explicit Cloth(const ClothSettings& settings = {});
 
-        // Initialize the particle indices and 3D world position of each particle
-        for (int i=0; i<n; i++) {
-            for (int j=0; j<n; j++) {
-                float spacing = 2.0f / (n-1);
-                float x = -1+j * spacing;
-                float y = 1-i * spacing;
-                at(i,j).position = glm::vec3(x,y,0);
-            }
-        }
+    void update(float dt);
+    void reset();
 
-        const float spacing = 2.0f / (n-1);
-        const float structuralStiffness = 10.0f;
-        const float shearStiffness = 5.0f;
-        const float bendStiffness = 1.0f;
-        auto idx = [n](int i, int j) { return i*n+j; };
-        for (int i=0; i<n; i++) {
-            for (int j=0; j<n; j++) {
-                if (j+1 < n) springs.push_back({idx(i,j), idx(i,j+1), spacing, structuralStiffness});
-                if (i+1 < n) springs.push_back({idx(i,j), idx(i+1,j), spacing, structuralStiffness});
+    void releasePins();
 
-                if (i+1 < n && j+1 < n) springs.push_back({idx(i,j), idx(i+1,j+1), spacing*std::sqrt(2.0f), shearStiffness});
-                if (i+1 < n && j-1 >= 0) springs.push_back({idx(i,j), idx(i+1,j-1), spacing*std::sqrt(2.0f), shearStiffness});
+    Particle& at(int i, int j) { return particles_[i*N + j]; }
+    int resolution() const { return N; }
+    float spacing() const { return settings_.size / (N - 1); }
 
-                if (j+2 < n) springs.push_back({idx(i,j), idx(i,j+2), 2.0f*spacing, bendStiffness});
-                if (i+2 < n) springs.push_back({idx(i,j), idx(i+2,j), 2.0f*spacing, bendStiffness});
-            }
-        }
-
-        // pin the corners
-        at(0,0).pinned=true;
-        at(0,n-1).pinned=true;
-    }
-
-    Particle& at(int i, int j) 
-    {
-        return particles[i*N+j];
-    }
-
-    std::vector<glm::vec3> getPositions() 
-    {
-        std::vector<glm::vec3> positions; 
-        positions.resize(particles.size()); // initialize the size of positions vector
-        for (size_t i = 0; i < particles.size(); ++i)
-            positions[i] = particles[i].position;
-        return positions;
-    }
-
-    void update(float dt) 
-    {
-        const int substeps = 4;
-        const float h = dt / substeps;
-        for (int s = 0; s < substeps; ++s) 
-        {
-
-            // apply gravity force
-            for (auto& particle : particles) 
-            {
-                particle.force = glm::vec3(0);
-                particle.force += glm::vec3(0, -9.81, 0) * particle.mass;
-            }
-
-            // apply spring force
-            for (auto& spring : springs)
-            {
-                glm::vec3 displacement = particles[spring.a].position - particles[spring.b].position;
-                glm::float32 currentLength = glm::length(displacement);
-                glm::float32 stretch = currentLength - spring.restLength;
-                glm::vec3 direction = displacement / currentLength;
-                glm::vec3 force = -spring.stiffness * stretch * direction;
-                particles[spring.a].force += force;
-                particles[spring.b].force -= force;
-            }
-
-            // apply total force
-            for (auto& particle : particles)
-            {
-                if (particle.pinned)
-                {
-                    continue;
-                }
-
-                particle.velocity += (particle.force / particle.mass) * h;
-                // add damping
-                particle.velocity *= glm::max(0.0f, 1.0f - 0.5f * h);
-                particle.position += particle.velocity * h;
-            }
-        }
-    }
+    const std::vector<Particle>& particles() const { return particles_; }
+    const std::vector<DistanceConstraint>& constraints() const { return constraints_; }
+    std::vector<glm::vec3> getPositions() const;
 
 private:
-    std::vector<Spring> springs;
-    std::vector<Particle> particles; // want to store as 1D vector, but access it like 2D vector
-    int N; // number of particles
+    void buildParticles();
+    void buildConstraints();
+
+    void substep(float h);
+    void integrate(float h);
+    void solveConstraints(float h);
+    void updateVelocities(float h);
+
+    ClothSettings settings_;
+    int N;
+    std::vector<Particle> particles_;
+    std::vector<DistanceConstraint> constraints_;
 };
