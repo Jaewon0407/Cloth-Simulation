@@ -1,13 +1,34 @@
 # Cloth Simulation
 
-A real-time cloth simulation in C++ with OpenGL 3.3.
+<p align="center">
+  <img src="images/cloth_demo.gif" alt="Cloth falling onto a sphere and box, being pushed by the sphere, and tearing" width="720">
+</p>
 
-- **XPBD solver** — Extended Position Based Dynamics with substepping, using structural, shear and bend distance constraints
-- **Collisions** — sphere, box and ground colliders with friction
-- **Self-collision** — spatial hash grid with neighbor lists cached across substeps
-- **Tearing** — constraints break when stretched past a set ratio of their rest length
-- **Multithreading** — custom thread pool; constraints are graph-colored so each color is solved in parallel without data races
-- **Rendering** — OpenGL + GLM math
+<p align="center">
+  <img src="images/drape.png" alt="Cloth draped over the sphere and box colliders" width="32%">
+  <img src="images/sphere_push.png" alt="Sphere pushing into the hanging cloth" width="32%">
+  <img src="images/tearing.png" alt="Cloth tearing as the pinned edge is pulled apart" width="32%">
+</p>
+<p align="center"><em>Left to right: draped over the colliders, pushed by the sphere, torn apart.</em></p>
+
+## Features
+
+### Physics
+- XPBD solver with 15 substeps per frame
+- Structural, shear and bend constraints: 9,200+ at the default 40×40 size
+- Gravity and damping
+
+### Collisions
+- Sphere, box and ground colliders, with friction
+- Self-collision using a spatial hash grid, so the cloth doesn't pass through itself
+
+### Tearing
+- Constraints break when stretched past 1.6× their rest length
+
+### Performance
+- Custom thread pool for multithreading
+- Graph coloring that splits constraints into 13 groups so they can be solved in parallel safely
+- Headless benchmark tool that compares 1 thread against all cores at 1,600, 6,400 and 25,600 particles
 
 ## Controls
 
