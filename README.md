@@ -11,25 +11,6 @@
 </p>
 <p align="center"><em>Left to right: draped over the colliders, pushed by the sphere, torn apart.</em></p>
 
-## Features
-
-### Physics
-- XPBD solver with 15 substeps per frame
-- Structural, shear and bend constraints: 9,200+ at the default 40×40 size
-- Gravity and damping
-
-### Collisions
-- Sphere, box and ground colliders, with friction
-- Self-collision using a spatial hash grid, so the cloth doesn't pass through itself
-
-### Tearing
-- Constraints break when stretched past 1.6× their rest length
-
-### Performance
-- Custom thread pool for multithreading
-- Graph coloring that splits constraints into 13 groups so they can be solved in parallel safely
-- Headless benchmark tool that compares 1 thread against all cores at 1,600, 6,400 and 25,600 particles
-
 ## Controls
 
 | Key | Action |
